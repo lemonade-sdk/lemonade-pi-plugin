@@ -281,9 +281,9 @@ function mapToProviderModel(m: LemonadeModelInfo) {
   }
   const cfg = m.config ?? {};
   const contextWindow =
-    (cfg["context_window"] as number) ?? (cfg["context_len"] as number) ?? 128000;
+    (cfg["context_window"] as number) ?? (cfg["context_len"] as number) ?? 256000;
   const maxTokens =
-    (cfg["max_new_tokens"] as number) ?? (cfg["max_tokens"] as number) ?? 4096;
+    (cfg["max_new_tokens"] as number) ?? (cfg["max_tokens"] as number) ?? 8192;
   return {
     id: m.id,
     name: m.name || m.id,
