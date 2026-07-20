@@ -82,7 +82,18 @@ The Pi-side API call goes through Lemonade's OpenAI-compatible `/v1/chat/complet
 ```
 lemonade-pi-plugin/
 ├── extensions/
-│   └── index.ts          Single-file extension (loaded by Pi via jiti)
+│   └── index.ts          Extension entry point (thin, imports from lib/)
+├── lib/
+│   ├── types.ts          Shared type/interface definitions
+│   ├── constants.ts      Provider IDs, ports, TTLs
+│   ├── credentials.ts    OAuth credential encoding/decoding
+│   ├── url-helpers.ts    URL building and auth header helpers
+│   ├── discovery.ts      UDP beacon + HTTP port scanning
+│   ├── http.ts           /health and /models API calls
+│   ├── models.ts         Model mapping (Lemonade → Pi shape)
+│   ├── provider.ts       Provider (re-)registration
+│   ├── oauth.ts          /login OAuth flow
+│   └── admin.ts          /lemonade admin command
 ├── scripts/
 │   ├── install.sh        Symlink the repo into ~/.pi/agent/extensions/
 │   └── publish.sh        npm version bump + publish
