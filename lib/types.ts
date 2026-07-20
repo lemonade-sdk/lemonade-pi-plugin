@@ -74,6 +74,14 @@ export interface LemonadeModelInfo {
   recipe?: string;
   loaded?: boolean;
   size?: number;
+  max_context_window?: number;
+  recipe_options?: {
+    ctx_size?: number;
+    llamacpp_args?: string;
+    pinned?: boolean;
+    [k: string]: unknown;
+  };
+  backend_url?: string;
   config?: Record<string, unknown>;
 }
 

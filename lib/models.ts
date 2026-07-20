@@ -18,10 +18,19 @@ export function mapToProviderModel(m: LemonadeModelInfo) {
     input.push("image");
   }
   const cfg = m.config ?? {};
+  const recipeOpts = m.recipe_options ?? {};
+
+  // Priority: loaded model's actual ctx_size > max_context_window > config fallback
   const contextWindow =
-    (cfg["context_window"] as number) ?? (cfg["context_len"] as number) ?? 128000;
+    (recipeOpts["ctx_size"] as number) ??
+    (cfg["max_context_window"] as number) ??
+    (cfg["context_window"] as number) ??
+    (cfg["context_len"] as number) ??
+    128000;
   const maxTokens =
-    (cfg["max_new_tokens"] as number) ?? (cfg["max_tokens"] as number) ?? 4096;
+    (cfg["max_new_tokens"] as number) ??
+    (cfg["max_tokens"] as number) ??
+    4096;
   return {
     id: m.id,
     name: m.name || m.id,

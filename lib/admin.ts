@@ -155,9 +155,12 @@ export function registerAdminCommand(pi: ExtensionAPI, oauthBlock: unknown): voi
             const status = m.loaded ? "●" : "○";
             const size = m.size ? ` (${formatBytes(m.size)})` : "";
             out += `  ${status} ${m.name || m.id}${size}\n`;
-            if (m.recipe) {
-              out += `      recipe: ${m.recipe}, backend: ${m.backend ?? "—"}\n`;
-            }
+            const parts: string[] = [];
+            if (m.recipe) parts.push(`recipe: ${m.recipe}`);
+            const ctxSize = m.recipe_options?.ctx_size;
+            if (ctxSize) parts.push(`ctx: ${ctxSize.toLocaleString()}`);
+            if (m.max_context_window) parts.push(`max: ${m.max_context_window.toLocaleString()}`);
+            if (parts.length) out += `      ${parts.join(", ")}\n`;
           }
           ctx.ui.notify(out, "info");
           return;
