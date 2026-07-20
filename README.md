@@ -2,15 +2,15 @@
 
 Pi.dev extension that registers [Lemonade](https://github.com/lemonade-sdk/lemonade) — a local LLM server with GPU/NPU acceleration — as a custom provider in Pi.
 
-After install, type `/login` in Pi then `subscription` and pick **Lemonade**, lets you confirm or override the URL, optionally collects an API key, then registers every model your server exposes.
+After install, type `/login` in Pi, pick **Lemonade** from the OAuth selector, confirm or override the server URL, optionally enter an API key, then all models exposed by your server are registered automatically.
 
 ## Features
 
 - **Built-in `/login` integration** — appears as a "Lemonade" choice in Pi's OAuth selector. No custom slash commands needed.
 - **UDP beacon discovery** — listens for Lemonade's broadcast on port `13305` (the same channel `lemonade scan` uses) and finds local *and* LAN servers automatically.
-- **HTTP fallback** — scans `localhost:13305`, `1234`, `9000`, `8080` if no beacon arrives.
+- **HTTP fallback** — scans `localhost:13305`, `8000`, `1234`, `9000`, `8080` if no beacon arrives.
 - **API key support** — prompted during login, stored by Pi in `~/.pi/agent/auth.json`, sent as `Authorization: Bearer …` on every request.
-- **Model admin** — `/lemonade` for status, list, load, unload, pull, delete, refresh, discover.
+- **Model admin** — `/lemonade` for status, health, list, models, load, unload, pull, delete, refresh, discover, change-ctx.
 
 ## Install
 
@@ -38,7 +38,7 @@ The installer creates `~/.pi/agent/extensions/lemonade-provider` as a symlink to
 2. Start Pi: `pi`
 3. Type `/login` → pick **Lemonade** from the selector.
 4. The extension prompts you in order:
-   - **Server selection** — if one server was found, press Enter to accept; if multiple, type the number; if none, type a URL (default: `http://localhost:13305`).
+   - **Server selection** — if one server was found, press Enter to accept; if multiple, type the number; if none, type a URL (default: `http://localhost:8000`).
    - **API key** — **Do not leave this blank.** Enter a dummy value (e.g., `lemonade`) or paste your actual key. Even if your local server does not enforce authentication, the underlying Pi client wrapper requires a non-empty string to pass its internal validation rules.
 5. After verification, the extension registers every model the server reports, and it appears in Pi's model picker under "Lemonade".
 
@@ -57,13 +57,15 @@ Once logged in, you can manage the connected server without leaving Pi:
 | Command | What it does |
 |---|---|
 | `/lemonade status` | Server health: version, currently loaded model, all loaded models, WebSocket port |
-| `/lemonade models` | List every model the server knows about, with size and recipe |
+| `/lemonade health` | Server health (rich): detailed display with backend info, recipe options, model limits |
+| `/lemonade models` / `list` | List every model the server knows about, with size, recipe, and context window |
 | `/lemonade load <id>` | Load a model into memory (`POST /api/v1/load`) |
 | `/lemonade unload [id]` | Unload one model, or all loaded models if no id |
 | `/lemonade pull <id>` | Download a model (`POST /api/v1/pull`) |
 | `/lemonade delete <id>` | Delete a model from disk (`POST /api/v1/delete`) |
 | `/lemonade refresh` | Re-fetch the model list and re-register the provider in Pi |
 | `/lemonade discover` | Print every Lemonade server visible via beacon + HTTP scan |
+| `/lemonade change-ctx <ctx_size> [model]` | Change context size for a loaded model (supports `32k`, `64k`, `1m`, etc.) |
 
 ## How it works
 
@@ -93,6 +95,8 @@ lemonade-pi-plugin/
 │   ├── models.ts         Model mapping (Lemonade → Pi shape)
 │   ├── provider.ts       Provider (re-)registration
 │   ├── oauth.ts          /login OAuth flow
+│   ├── health.ts         Rich health formatter (used by /lemonade health)
+│   ├── change-ctx.ts     Context size change for loaded models
 │   └── admin.ts          /lemonade admin command
 ├── scripts/
 │   ├── install.sh        Symlink the repo into ~/.pi/agent/extensions/

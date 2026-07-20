@@ -14,6 +14,7 @@ import { checkHealth, fetchModels } from "./http.js";
 import { registerLemonadeProvider } from "./provider.js";
 import { discoverViaBeacon, discoverViaHttp } from "./discovery.js";
 import { fmtHealth } from "./health.js";
+import { changeModelContext } from "./change-ctx.js";
 
 // ─── Format helpers ─────────────────────────────────────────────────────────
 
@@ -82,7 +83,8 @@ export function registerAdminCommand(pi: ExtensionAPI, oauthBlock: unknown): voi
             "  pull <id>          — download a model\n" +
             "  delete <id>        — remove a model from disk\n" +
             "  refresh            — re-fetch model list and re-register provider\n" +
-            "  discover           — UDP beacon + HTTP port scan",
+            "  discover           — UDP beacon + HTTP port scan\n" +
+            "  change-ctx <ctx_size> [model] — change context size for loaded model",
           "info",
         );
         return;
@@ -227,6 +229,141 @@ export function registerAdminCommand(pi: ExtensionAPI, oauthBlock: unknown): voi
         case "refresh": {
           const count = await registerLemonadeProvider(pi, payload, oauthBlock);
           ctx.ui.notify(`Re-synced: ${count} models registered.`, "info");
+          return;
+        }
+
+        // ── change-ctx (change context size for loaded model) ─────────────
+        case "change-ctx": {
+          // Parse: /lemonade change-ctx <ctx_size> [model_name]
+          const ctxSizeStr = rest[0];
+          const targetModelName = rest[1] ?? null;
+
+          if (!ctxSizeStr) {
+            ctx.ui.notify(
+              `Usage: /lemonade change-ctx <ctx_size> [model_name]\n` +
+              `  <ctx_size>      — new context size (required)\n` +
+              `  [model_name]    — optional (uses first loaded model if omitted)\n\n` +
+              `  Supported formats: 32768, 32k, 64k, 128k, 1m, 2m, etc.\n` +
+              `  (k = ×1024, m = ×1048576, plain number = exact tokens)\n` +
+              `  Minimum: 32768 tokens (32k)\n\n` +
+              `  Examples: /lemonade change-ctx 64k\n` +
+              `            /lemonade change-ctx 128k\n` +
+              `            /lemonade change-ctx 131072\n` +
+              `            /lemonade change-ctx 1m Qwen3.6-35B-A3B-GGUF`,
+              "warning",
+            );
+            return;
+          }
+
+          // Parse context size string (supports: "32768", "32k", "1m", etc.)
+          function parseCtxSize(input: string, maxVal: number): number | null {
+            const normalized = input.trim().toLowerCase();
+            let rawNumber: number;
+
+            if (normalized.endsWith("k")) {
+              rawNumber = parseFloat(normalized.slice(0, -1));
+              if (isNaN(rawNumber)) return null;
+              rawNumber = Math.round(rawNumber * 1024);
+            } else if (normalized.endsWith("m")) {
+              rawNumber = parseFloat(normalized.slice(0, -1));
+              if (isNaN(rawNumber)) return null;
+              rawNumber = Math.round(rawNumber * 1024 * 1024);
+            } else {
+              rawNumber = parseInt(normalized, 10);
+              if (isNaN(rawNumber) || rawNumber < 0) return null;
+            }
+
+            if (rawNumber <= 0) return null;
+            return Math.min(rawNumber, maxVal);
+          }
+
+          // Read health to discover loaded models & limits
+          const health = await checkHealth(baseUrl, apiKey);
+          if (!health) {
+            ctx.ui.notify(`Cannot reach Lemonade at ${baseUrl}`, "error");
+            return;
+          }
+
+          if (health.all_models_loaded.length === 0) {
+            ctx.ui.notify(
+              "No models loaded. Load one first with /lemonade load.",
+              "warning",
+            );
+            return;
+          }
+
+          const MIN_CTX = 32 * 1024; // 32k
+          let targetModel: (typeof health.all_models_loaded)[0];
+
+          if (targetModelName) {
+            targetModel = health.all_models_loaded.find(
+              (bm) => bm.model_name === targetModelName || bm.model_name.includes(targetModelName),
+            );
+            if (!targetModel) {
+              const loadedNames = health.all_models_loaded.map((m) => m.model_name).join(", ");
+              ctx.ui.notify(
+                `Model "${targetModelName}" not found among loaded models.\n` +
+                `Loaded: ${loadedNames || "(none)"}`,
+                "error",
+              );
+              return;
+            }
+          } else {
+            targetModel = health.all_models_loaded[0];
+          }
+
+          const currentCtx = targetModel.recipe_options?.ctx_size ?? 0;
+          const maxCtx = targetModel.max_context_window;
+
+          ctx.ui.notify(
+            `Model:          ${targetModel.model_name}\n` +
+              `Current ctx: ${currentCtx.toLocaleString()} tokens\n` +
+              `Minimum ctx: ${MIN_CTX.toLocaleString()} tokens (32k)\n` +
+              `Maximum ctx: ${maxCtx.toLocaleString()} tokens`,
+            "info",
+          );
+
+          const newCtxSize = parseCtxSize(ctxSizeStr, maxCtx);
+          if (newCtxSize === null) {
+            ctx.ui.notify(`Invalid ctx_size: "${ctxSizeStr}". Use a positive number or k/m (e.g. 32k, 1m).`, "error");
+            return;
+          }
+
+          if (newCtxSize < MIN_CTX) {
+            ctx.ui.notify(
+              `Required value ${newCtxSize.toLocaleString()} is below minimum (${MIN_CTX.toLocaleString()} / 32k).\n` +
+              `Using ${MIN_CTX.toLocaleString()} (32k) instead.`,
+              "warning",
+            );
+          }
+
+          const finalCtx = Math.max(newCtxSize, MIN_CTX);
+
+          if (finalCtx === currentCtx) {
+            ctx.ui.notify(
+              `ctx_size is already ${finalCtx.toLocaleString()}. No changes needed.`,
+              "info",
+            );
+            return;
+          }
+
+          ctx.ui.notify(`Applying ctx_size=${finalCtx.toLocaleString()} to ${targetModel.model_name}…\n(Unload + reload with save_options)`, "info");
+
+          const result = await changeModelContext(baseUrl, apiKey, targetModel.model_name, finalCtx);
+          if (!result.success) {
+            ctx.ui.notify(result.error ?? "Failed to change ctx_size.", "error");
+            return;
+          }
+
+          ctx.ui.notify(
+            `✓ ctx_size changed: ${currentCtx.toLocaleString()} → ${finalCtx.toLocaleString()} tokens\n` +
+              `Updating metadata…`,
+            "info",
+          );
+
+          // Re-sync provider to update contextWindow
+          await registerLemonadeProvider(pi, payload, oauthBlock);
+          ctx.ui.notify("Provider re-registered with new ctx.", "info");
           return;
         }
 
