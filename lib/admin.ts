@@ -13,6 +13,7 @@ import { decodeCreds } from "./credentials.js";
 import { checkHealth, fetchModels } from "./http.js";
 import { registerLemonadeProvider } from "./provider.js";
 import { discoverViaBeacon, discoverViaHttp } from "./discovery.js";
+import { fmtHealth } from "./health.js";
 
 // ─── Format helpers ─────────────────────────────────────────────────────────
 
@@ -73,7 +74,8 @@ export function registerAdminCommand(pi: ExtensionAPI, oauthBlock: unknown): voi
       if (cmd === "" || cmd === "help") {
         ctx.ui.notify(
           "/lemonade <command>\n" +
-            "  status             — server health\n" +
+            "  status             — server health (simple)\n" +
+            "  health             — server health (rich, detailed)\n" +
             "  models             — list models\n" +
             "  load <id>          — load a model into memory\n" +
             "  unload [id]        — unload a model (or all if no id)\n" +
@@ -113,6 +115,17 @@ export function registerAdminCommand(pi: ExtensionAPI, oauthBlock: unknown): voi
       const apiKey = payload.apiKey || undefined;
 
       switch (cmd) {
+        // ── health (rich formatter) ───────────────────────────────────────
+        case "health": {
+          const h = await checkHealth(baseUrl, apiKey);
+          if (!h) {
+            ctx.ui.notify(`Cannot reach Lemonade at ${baseUrl}`, "error");
+            return;
+          }
+          ctx.ui.notify(fmtHealth(h), "info");
+          return;
+        }
+
         case "status": {
           const h = await checkHealth(baseUrl, apiKey);
           if (!h) {

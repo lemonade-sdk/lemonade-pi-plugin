@@ -31,12 +31,39 @@ export interface PiCommandContext {
 
 // ─── Lemonade server types ──────────────────────────────────────────────────
 
+export interface BackendModel {
+  type: string;
+  model_name: string;
+  checkpoint: string;
+  loaded: boolean;
+  status: string;
+  backend_alive: boolean;
+  backend_health: string;
+  backend_url: string;
+  device: string;
+  pid: number;
+  max_context_window: number;
+  pinned: boolean;
+  recipe: string;
+  recipe_options: {
+    ctx_size: number;
+    llamacpp_args: string;
+    pinned: boolean;
+    [k: string]: unknown;
+  };
+  watchdog_reset: boolean;
+  last_use: number;
+}
+
 export interface LemonadeHealth {
   status: string;
   version: string;
   model_loaded: string | null;
-  all_models_loaded?: string[] | null;
-  websocket_port?: number;
+  all_models_loaded: BackendModel[];
+  websocket_port: number;
+  max_models: Record<string, number>;
+  pinned_models: Record<string, number>;
+  telemetry: { enabled: boolean };
 }
 
 export interface LemonadeModelInfo {
