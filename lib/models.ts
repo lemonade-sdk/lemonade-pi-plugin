@@ -49,10 +49,6 @@ interface ThinkingSpec {
   levels: Partial<Record<ThinkingLevel, string | null>>;
   /** Hard-disable value sent at `off`; null = leave the template default. */
   offValue: string | null;
-  /** vLLM/sglang: cap reasoning tokens per level (top-level request field). */
-  tokenBudgetField?: "thinking_token_budget" | "thinking_budget";
-  /** pi thinking level → max reasoning tokens. */
-  tokenBudgets?: Partial<Record<ThinkingLevel, number>>;
 }
 
 const THINKING_SPECS: ThinkingSpec[] = [
@@ -70,8 +66,6 @@ const THINKING_SPECS: ThinkingSpec[] = [
       xhigh: "high",
     },
     offValue: "none",
-    tokenBudgetField: "thinking_token_budget",
-    tokenBudgets: { minimal: 2048, low: 4096, medium: 16384, high: 32768 },
   },
 ];
 
@@ -130,11 +124,7 @@ export function mapToProviderModel(m: LemonadeModelInfo) {
               },
               preserve_thinking: true,
             },
-            ...(thinking.tokenBudgetField
-              ? { supportsThinkingTokenBudget: true }
-              : {}),
           },
-          ...(thinking.tokenBudgets ? { thinkingBudgets: thinking.tokenBudgets } : {}),
         }
       : {}),
   };

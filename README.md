@@ -124,7 +124,7 @@ lemonade-pi-plugin/
 
 `off` sends `"reasoning_effort": "none"`, which hard-disables thinking. A top-level `reasoning_effort` field is ignored by vLLM — it only works inside `chat_template_kwargs` or via `--default-chat-template-kwargs` at launch.
 
-**Reasoning still seems long at `low`.** vLLM clamps `reasoning_effort` to whatever the model's template accepts, and the plugin additionally caps reasoning tokens per level (`thinking_token_budget`: 4096 at low, 16384 at medium, 32768 at high). Tune `THINKING_SPECS` in `lib/models.ts` to change the levels or budgets.
+**Reasoning still seems long at `low`.** vLLM clamps `reasoning_effort` to whatever the model's chat template accepts; if the template ignores effort entirely, the only lever is the template itself (or `--default-chat-template-kwargs` at launch). Tune `THINKING_SPECS` in `lib/models.ts` to change the exposed levels.
 
 **No servers discovered.** Confirm `lemond` is running: `curl http://localhost:13305/api/v1/health`. Confirm port 13305 isn't blocked by a local firewall (UDP). The HTTP fallback should still find a localhost server even if the beacon is blocked.
 
