@@ -112,6 +112,20 @@ lemonade-pi-plugin/
 
 **"Lemonade" doesn't appear in /login.** Restart Pi (or `/reload`). Confirm the symlink exists: `ls -la ~/.pi/agent/extensions/lemonade-provider`.
 
+**Thinking levels don't change anything (Qwen 3.8 on vLLM).** pi only sends the per-level `chat_template_kwargs` with the `chat-template` thinking format, which exists in pi ≥ 0.80. Check `pi --version` and update if older (`npm i -g @earendil-works/pi-coding-agent@latest`). The plugin registers thinking controls for Qwen 3.8 models that produce, e.g. for level `low`:
+
+```json
+"chat_template_kwargs": {
+  "enable_thinking": true,
+  "reasoning_effort": "low",
+  "preserve_thinking": true
+}
+```
+
+`off` sends `"reasoning_effort": "none"`, which hard-disables thinking. A top-level `reasoning_effort` field is ignored by vLLM — it only works inside `chat_template_kwargs` or via `--default-chat-template-kwargs` at launch.
+
+**Reasoning still seems long at `low`.** vLLM clamps `reasoning_effort` to whatever the model's template accepts, and the plugin additionally caps reasoning tokens per level (`thinking_token_budget`: 4096 at low, 16384 at medium, 32768 at high). Tune `THINKING_SPECS` in `lib/models.ts` to change the levels or budgets.
+
 **No servers discovered.** Confirm `lemond` is running: `curl http://localhost:13305/api/v1/health`. Confirm port 13305 isn't blocked by a local firewall (UDP). The HTTP fallback should still find a localhost server even if the beacon is blocked.
 
 **Models don't appear in the picker after login.** Run `/lemonade refresh`. If still empty, check `/lemonade models` — if the server reports models there but Pi doesn't show them, your provider model list might be stale; a full Pi restart will re-trigger the OAuth refresh.
