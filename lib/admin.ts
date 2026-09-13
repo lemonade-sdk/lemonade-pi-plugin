@@ -11,10 +11,103 @@ import type { ExtensionAPI, OAuthCredentials, PiCommandContext } from "./types.j
 import { PROVIDER_ID } from "./constants.js";
 import { decodeCreds } from "./credentials.js";
 import { checkHealth, fetchModels } from "./http.js";
-import { registerLemonadeProvider } from "./provider.js";
+import { registerLemonadeProvider, getCachedServerModels } from "./provider.js";
+import { isPiVisible } from "./models.js";
+import type { AutocompleteItem } from "@earendil-works/pi-tui";
+import { syncModelStore } from "./sync-store.js";
 import { discoverViaBeacon, discoverViaHttp } from "./discovery.js";
 import { fmtHealth } from "./health.js";
 import { changeModelContext } from "./change-ctx.js";
+import { probeThinking, probeVision, buildTunedEntry, ggufBackfillNeeded } from "./model-probe.js";
+import type { ThinkingProbeResult, VisionProbeResult, TunedEntryMeta } from "./model-probe.js";
+import { fetchGgufParams } from "./gguf-params.js";
+import {
+  readPluginParams,
+  readUserParams,
+  upsertUserParamsEntry,
+  userParamsPath,
+  type ModelParamsEntry,
+} from "./model-params.js";
+import {
+  renderEntryOverview,
+  tunePickerOptions,
+} from "./tune-ui.js";
+import {
+  createTuneScreen,
+  type TuneStyle,
+} from "./tune-screen.js";
+import { matchesKey } from "@earendil-works/pi-tui";
+
+// ─── Theme wiring for the tune mask ─────────────────────────────────────────
+// (degrades to plain text when absent)
+export function tuneThemeStyle(theme: { fg?: (color: string, text: string) => string } | undefined): TuneStyle {
+  // theme.fg is a prototype method that reads `this.fgColors` — it must stay
+  // bound to `theme`; detaching it (const fg = theme.fg) makes `this` undefined
+  // at render time and crashes the TUI with "reading 'fgColors'".
+  const fg = theme?.fg ? (c: string, s: string) => theme.fg!(c, s) : (_c: string, s: string) => s;
+  return {
+    title: (s) => fg("accent", s),
+    accent: (s) => fg("accent", s),
+    dim: (s) => fg("dim", s),
+    ok: (s) => fg("success", s),
+    warn: (s) => fg("warning", s),
+  };
+}
+
+// ─── /lemonade argument completion ─────────────────────────────────────────
+
+const LEMONADE_SUBCOMMANDS = [
+  "status",
+  "models",
+  "list",
+  "health",
+  "load",
+  "unload",
+  "pull",
+  "delete",
+  "refresh",
+  "change-ctx",
+  "tune",
+];
+
+/**
+ * Argument completion for /lemonade: subcommands first, then (for `tune`)
+ * model ids from the latest provider-registration fetch. Synchronous by pi
+ * contract — served from the registration cache (models param), never a live
+ * fetch. Pi-visible models are the default completion set; any other server
+ * model can still be typed explicitly.
+ */
+export function lemonadeCompletions(
+  prefix: string,
+  models: { id: string; labels?: string[] }[] | undefined,
+): AutocompleteItem[] | null {
+  const tokens = prefix.trim().split(/\s+/).filter(Boolean);
+  const last = tokens.length > 0 ? tokens[tokens.length - 1].toLowerCase() : "";
+  // Model-id context: "tune <partial>" — including the cursor right after
+  // the trailing space ("tune ").
+  const inTuneArgs =
+    (tokens.length === 2 && tokens[0].toLowerCase() === "tune") ||
+    (tokens.length === 1 && tokens[0].toLowerCase() === "tune" && /\s$/.test(prefix));
+  if (inTuneArgs) {
+    // pi replaces the ENTIRE argument prefix with item.value — so the value
+    // must carry the "tune " prefix back, or selecting a model would drop
+    // the subcommand and leave "/lemonade <id>" (wrong syntax).
+    // The match tail is the raw text after the FINAL space — for "tune "
+    // that's "" (match every model), not the "tune" subcommand token.
+    const lastArg = prefix.slice(prefix.lastIndexOf(" ") + 1).toLowerCase();
+    const items = (models ?? [])
+      .filter((m) => isPiVisible(m))
+      .map((m) => m.id)
+      .filter((id) => id.toLowerCase().startsWith(lastArg))
+      .map((id) => ({ value: `tune ${id}`, label: id }));
+    return items.length > 0 ? items : null;
+  }
+  if (tokens.length <= 1) {
+    const items = LEMONADE_SUBCOMMANDS.filter((c) => c.startsWith(last)).map((v) => ({ value: v, label: v }));
+    return items.length > 0 ? items : null;
+  }
+  return null;
+}
 
 // ─── Format helpers ─────────────────────────────────────────────────────────
 
@@ -67,6 +160,7 @@ export async function readStoredPayload(): Promise<{
 export function registerAdminCommand(pi: ExtensionAPI, oauthBlock: unknown): void {
   pi.registerCommand("lemonade", {
     description: "Lemonade server administration (status, models, load/pull/delete)",
+    getArgumentCompletions: (prefix: string) => lemonadeCompletions(prefix, getCachedServerModels()),
     handler: async (args: string, ctx: PiCommandContext) => {
       const parts = args.trim().split(/\s+/).filter(Boolean);
       const cmd = (parts[0] ?? "").toLowerCase();
@@ -84,7 +178,13 @@ export function registerAdminCommand(pi: ExtensionAPI, oauthBlock: unknown): voi
             "  delete <id>        — remove a model from disk\n" +
             "  refresh            — re-fetch model list and re-register provider\n" +
             "  discover           — UDP beacon + HTTP port scan\n" +
-            "  change-ctx <ctx_size> [model] — change context size for loaded model",
+            "  change-ctx <ctx_size> [model] — change context size for loaded model\n" +
+            "  tune               — interactive picker over server models (catalog status)\n" +
+            "  tune <id>          — probe a model and interactively edit its catalog entry\n" +
+            "  tune <id> --json   — probe, print the raw JSON entry only (no write)\n" +
+            "  tune <id> --yes    — probe and write without the editor\n" +
+            "  tune <id> --no-probe — skip probing, keep catalog capabilities\n" +
+            "                     (tune is slow when the model is not loaded)",
           "info",
         );
         return;
@@ -228,6 +328,7 @@ export function registerAdminCommand(pi: ExtensionAPI, oauthBlock: unknown): voi
 
         case "refresh": {
           const count = await registerLemonadeProvider(pi, payload, oauthBlock);
+          syncModelStore(payload.baseUrl, payload.apiKey);
           ctx.ui.notify(`Re-synced: ${count} models registered.`, "info");
           return;
         }
@@ -361,9 +462,263 @@ export function registerAdminCommand(pi: ExtensionAPI, oauthBlock: unknown): voi
             "info",
           );
 
-          // Re-sync provider to update contextWindow
+          // Re-sync provider and models-store to update contextWindow
           await registerLemonadeProvider(pi, payload, oauthBlock);
+          syncModelStore(payload.baseUrl, payload.apiKey);
           ctx.ui.notify("Provider re-registered with new ctx.", "info");
+          return;
+        }
+
+        // ── tune (probe capabilities + GGUF metadata → catalog entry) ────
+        case "tune": {
+          const flags = rest.filter((a) => a.startsWith("--"));
+          let id = rest.find((a) => !a.startsWith("--"));
+
+          const models = await fetchModels(baseUrl, apiKey);
+
+          // No id → interactive picker: one compact row per model with
+          // catalog tier (user / plugin / not in model-params.json).
+          if (!id) {
+            const opts = tunePickerOptions(
+              models.map((m) => ({ id: m.id, loaded: m.loaded, labels: m.labels })),
+              { user: readUserParams(), plugin: readPluginParams() },
+            );
+            const pick = await ctx.ui.select(
+              "Tune which model? (Esc cancels)",
+              opts.map((o) => o.label).concat("cancel"),
+            );
+            const chosen = pick ? opts.find((o) => o.label === pick) : undefined;
+            if (!chosen) {
+              ctx.ui.notify("tune cancelled — nothing probed or written.", "info");
+              return;
+            }
+            id = chosen.id;
+          }
+
+          const model = models.find((m) => m.id === id || m.name === id);
+          if (!model) {
+            const known = models.map((m) => m.id).join(", ");
+            ctx.ui.notify(`Model "${id}" not found on server.\nKnown: ${known}`, "error");
+            return;
+          }
+
+          const labels = (model.labels ?? []).join(", ") || "(none)";
+          const existing = readUserParams()?.[model.id];
+          const prevMeta = (existing?._meta ?? undefined) as TunedEntryMeta | undefined;
+          const probedAt = prevMeta?.probedAt;
+          ctx.ui.notify(
+            `Tuning ${model.id}\n` +
+              `  server says: recipe=${model.recipe ?? "?"} labels=[${labels}]\n` +
+              (existing
+                ? `  catalog: user-tier entry${probedAt ? ` (probed ${probedAt.slice(0, 10)})` : ""}`
+                : `  catalog: not in model-params (fresh entry)`),
+            "info",
+          );
+
+          // Already catalogued → probing is optional (slow: the model may
+          // have to load). Ask; --no-probe skips without asking, --yes keeps
+          // the historic probe-then-write contract.
+          let doProbe = !flags.includes("--no-probe");
+          if (existing && doProbe) {
+            const choice = await ctx.ui.select(
+              `${model.id} is already in the catalog. Re-probe against the live server? (slow — may load the model)`,
+              ["re-probe — refresh capabilities", "skip — keep catalog entry as-is"],
+            );
+            if (!choice) {
+              ctx.ui.notify("Tune cancelled — nothing written.", "info");
+              return;
+            }
+            doProbe = choice.startsWith("re-probe");
+          }
+
+          let thinking: ThinkingProbeResult | undefined;
+          let vision: VisionProbeResult | undefined;
+          if (doProbe) {
+            ctx.ui.notify(`Probing the live server (may take minutes if the model must load)…`, "info");
+
+            ctx.ui.notify(`  probing thinking (2 budgeted requests)…`, "info");
+            thinking = await probeThinking(baseUrl, apiKey, model.id);
+            if (thinking.error) {
+              ctx.ui.notify(`  thinking probe failed: ${thinking.error}`, "warning");
+            } else {
+              ctx.ui.notify(
+                `  thinking: emits=${thinking.emitsReasoning} honorsBudget=${thinking.honorsBudget}` +
+                  ` (reasoning chars: small=${thinking.reasoningCharsSmall}, large=${thinking.reasoningCharsLarge})`,
+                "info",
+              );
+            }
+
+            ctx.ui.notify(`  probing vision (image request)…`, "info");
+            vision = await probeVision(baseUrl, apiKey, model.id);
+            ctx.ui.notify(`  vision: ${vision.vision ? "yes" : "no"} — ${vision.detail}`, "info");
+
+            // Tag/probe mismatch report (the whole point of probing)
+            const taggedReasoning = (model.labels ?? []).some((l) => l.toLowerCase() === "reasoning");
+            if (thinking && !thinking.error && taggedReasoning !== thinking.emitsReasoning) {
+              ctx.ui.notify(
+                `  ⚠ tag mismatch: server labels say reasoning=${taggedReasoning}, probe says ${thinking.emitsReasoning} — trusting the probe.`,
+                "warning",
+              );
+            }
+          } else {
+            ctx.ui.notify(
+              `  skip: keeping catalog capabilities as-is${flags.includes("--no-probe") ? " (--no-probe)" : ""}`,
+              "info",
+            );
+          }
+
+          // Checkpoint-exact sampling metadata from the GGUF file itself
+          // (general.sampling.* kvs). Fetched only when the backfill could
+          // actually write — target sampling row absent. A catalogued,
+          // user-amended model never pays the (slow) HF metadata fetch.
+          const targetRow: "thinking" | "nonThinking" | undefined =
+            doProbe && thinking && !thinking.error
+              ? thinking.emitsReasoning
+                ? "thinking"
+                : "nonThinking"
+              : prevMeta?.probe.thinking !== undefined
+                ? prevMeta.probe.thinking
+                  ? "thinking"
+                  : "nonThinking"
+                : undefined;
+          let gguf: { sampling?: { temp?: number; top_p?: number; top_k?: number; min_p?: number }; ref?: string } | undefined;
+          if (!model.checkpoint) {
+            ctx.ui.notify(`  gguf: no checkpoint pointer on this model — skipped`, "info");
+          } else if (!ggufBackfillNeeded(true, targetRow, existing as Record<string, unknown> | undefined)) {
+            ctx.ui.notify(`  gguf: skipped — sampling row already set (no backfill needed)`, "info");
+          } else {
+            ctx.ui.notify(`  fetching GGUF metadata from checkpoint (${model.checkpoint})…`, "info");
+            const info = await fetchGgufParams(model.checkpoint);
+            if (info?.sampling && Object.keys(info.sampling).length > 0) {
+              gguf = { sampling: info.sampling, ref: model.checkpoint };
+              const s = info.sampling;
+              ctx.ui.notify(
+                `  gguf: temp=${s.temp ?? "—"} top_p=${s.top_p ?? "—"} top_k=${s.top_k ?? "—"} min_p=${s.min_p ?? "—"}` +
+                  (info.architecture ? ` arch=${info.architecture}` : ""),
+                "info",
+              );
+            } else {
+              ctx.ui.notify(
+                `  gguf: no embedded sampling metadata — sampling rows left unset (server defaults stand)`,
+                "info",
+              );
+            }
+          }
+
+          const entry = buildTunedEntry(model, thinking, vision, gguf, existing as Record<string, unknown> | undefined);
+          const tier = existing ? "user tier (existing, merged)" : "new user-tier entry";
+
+          // --json: raw entry, no write (escape hatch / scripting)
+          if (flags.includes("--json")) {
+            ctx.ui.notify(
+              `Proposed catalog entry for ${model.id} (provenance in _meta):\n` +
+                "```json\n" + JSON.stringify(entry, null, 2) + "\n```",
+              "info",
+            );
+            return;
+          }
+
+          // Readable overview (replaces the old raw-JSON dump)
+          ctx.ui.notify(
+            renderEntryOverview(model.id, entry, {
+              tier,
+              loaded: model.loaded,
+              ctxWindow: model.max_context_window,
+              serverTags: model.labels,
+            }),
+            "info",
+          );
+
+          // Fullscreen tune mask: every tunable in one list, ↑↓/tab to move,
+          // ←→ to toggle/nudge, enter to edit, s to validate + write.
+          let alreadyWritten = false;
+          if (!flags.includes("--yes") && ctx.ui.custom) {
+            let lastWriteError: string | undefined;
+            let outcome: "saved" | "cancelled" = "cancelled";
+            await ctx.ui.custom<void>((tui, theme, _kb, done) =>
+              createTuneScreen({
+                entry,
+                meta: {
+                  id: model.id,
+                  tier,
+                  loaded: model.loaded,
+                  ctxWindow: model.max_context_window,
+                  tags: model.labels,
+                  probedAt,
+                },
+                tui,
+                style: tuneThemeStyle(theme),
+                matches: matchesKey,
+                callbacks: {
+                  onCommit: (e) => {
+                    // Single sanctioned write path: atomic, never clobbers
+                    // a corrupt user file (reported back, screen stays open).
+                    const wr = upsertUserParamsEntry(model.id, e as ModelParamsEntry);
+                    if (wr === "abort-corrupt") {
+                      const msg =
+                        `${userParamsPath()} is corrupt and was left untouched.\n` +
+                        `Fix or remove the file, then re-run: /lemonade tune ${model.id}`;
+                      lastWriteError = msg;
+                      return msg;
+                    }
+                    if (wr === "error") {
+                      const msg = `Failed to write ${userParamsPath()}.`;
+                      lastWriteError = msg;
+                      return msg;
+                    }
+                    lastWriteError = undefined; // a later save supersedes earlier failures
+                    alreadyWritten = true;
+                    return "ok";
+                  },
+                  onClose: (committed) => {
+                    outcome = committed && !lastWriteError ? "saved" : "cancelled";
+                    done(undefined);
+                  },
+                },
+              }),
+            );
+            if (outcome === "saved") {
+              // falls through to the re-sync below (entry already written)
+            } else if (lastWriteError) {
+              ctx.ui.notify(lastWriteError, "error");
+              return;
+            } else {
+              ctx.ui.notify("Tune cancelled — nothing written.", "info");
+              return;
+            }
+          } else if (flags.includes("--yes")) {
+            ctx.ui.notify(`Writing entry for ${model.id} (--yes — editor skipped).`, "info");
+          }
+
+          if (alreadyWritten) {
+            // Written by the mask — skip the shared write path below.
+          } else {
+            // Single sanctioned write path: atomic (tmp+rename), and a corrupt
+            // user file is NEVER clobbered — the write is aborted with a warning.
+            const writeResult = upsertUserParamsEntry(model.id, entry as ModelParamsEntry);
+            if (writeResult === "abort-corrupt") {
+              ctx.ui.notify(
+                `NOT WRITTEN — ${userParamsPath()} is corrupt and was left untouched.\n` +
+                  `Fix or remove the file, then re-run: /lemonade tune ${model.id}\n` +
+                  "(re-running re-probes and re-offers the entry; nothing is lost)",
+                "error",
+              );
+              return;
+            }
+            if (writeResult === "error") {
+              ctx.ui.notify(`Failed to write ${userParamsPath()}.`, "error");
+              return;
+            }
+          }
+
+          // Re-sync so the new capabilities take effect without a restart.
+          await registerLemonadeProvider(pi, payload, oauthBlock);
+          syncModelStore(payload.baseUrl, payload.apiKey);
+          ctx.ui.notify(
+            `✓ ${model.id} configured. Provider re-registered — capabilities active now.\n` +
+              `(Sampling applies per-request; capabilities/maxTokens apply on this re-sync.)`,
+            "info",
+          );
           return;
         }
 

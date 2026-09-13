@@ -66,6 +66,43 @@ Once logged in, you can manage the connected server without leaving Pi:
 | `/lemonade refresh` | Re-fetch the model list and re-register the provider in Pi |
 | `/lemonade discover` | Print every Lemonade server visible via beacon + HTTP scan |
 | `/lemonade change-ctx <ctx_size> [model]` | Change context size for a loaded model (supports `32k`, `64k`, `1m`, etc.) |
+| `/lemonade tune <id>` | Probe a model's real capabilities (thinking, vision) against the running server, fetch the checkpoint's embedded GGUF sampling metadata, and write a provenance-tracked entry to the per-model catalog |
+
+## Per-model catalog
+
+Model capabilities and tuning parameters are driven by a per-model catalog —
+no name heuristics. Models with a catalog entry get exactly what is written;
+models without an entry get plain upstream behavior (no capability changes,
+no parameter injection).
+
+Two tiers, merged per model id (user tier wins field-by-field):
+
+1. **User tier** — `~/.pi/agent/model-params.json` (override the path with
+   `LEMONADE_PARAMS_FILE`). Optional. Recognized models (present in
+   [`examples/model-params.example.json`](examples/model-params.example.json))
+   are seeded here **on first use, one model at a time** — the model of the
+   request is the only reliable "current model" signal, so seeding follows
+   what you actually run, never a bulk preload. Other models are created
+   with `/lemonade tune <id>` (probes the running server) or by hand.
+   Unknown models (neither tier) keep sane defaults: recipe-keyword
+   reasoning detection in model sync, plain pi pass-through for tuning —
+   nothing is invented.
+2. **Plugin tier** — `lib/model-params.json` in this package (empty by
+design — shipped entries live in
+   [`examples/model-params.example.json`](examples/model-params.example.json)
+   for reference). A first-use seed also refreshes `models-store.json`
+   (debounced) so the seeded model's reasoning flag — and therefore its
+   available thinking levels — apply without a pi restart.
+
+`/lemonade tune <id>` writes only what it sourced or proved: probe results
+for `reasoning`/`vision`, and the checkpoint's embedded
+`general.sampling.*` values (read from the GGUF file via its HuggingFace
+pointer) for the sampling row. Every written field is recorded in an
+`_meta` provenance block; anything else (budgets, response ceiling,
+off-switch params) stays unset until you add it — unset fields mean
+"server defaults stand".
+
+See the example file for the full entry schema (partial rows allowed).
 
 ## How it works
 
