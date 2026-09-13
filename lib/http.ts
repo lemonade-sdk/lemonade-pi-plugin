@@ -63,6 +63,15 @@ export async function fetchModels(baseUrl: string, apiKey?: string): Promise<Lem
         loaded,
         size: typeof m.size === "number" ? m.size : undefined,
         max_context_window: typeof m.max_context_window === "number" ? m.max_context_window : undefined,
+        // Propagate labels — model capabilities (e.g. vision) are derived
+        // from them in mapToProviderModel; dropping them here silently
+        // demotes every model to text-only input.
+        labels: Array.isArray(m.labels)
+          ? (m.labels as string[]).filter((l): l is string => typeof l === "string")
+          : undefined,
+        config: m.config && typeof m.config === "object"
+          ? m.config as Record<string, unknown>
+          : undefined,
         recipe_options: m.recipe_options && typeof m.recipe_options === "object"
           ? m.recipe_options as LemonadeModelInfo["recipe_options"]
           : undefined,

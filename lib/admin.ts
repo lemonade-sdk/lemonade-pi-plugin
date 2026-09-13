@@ -12,6 +12,7 @@ import { PROVIDER_ID } from "./constants.js";
 import { decodeCreds } from "./credentials.js";
 import { checkHealth, fetchModels } from "./http.js";
 import { registerLemonadeProvider } from "./provider.js";
+import { syncModelStore } from "./sync-store.js";
 import { discoverViaBeacon, discoverViaHttp } from "./discovery.js";
 import { fmtHealth } from "./health.js";
 import { changeModelContext } from "./change-ctx.js";
@@ -228,6 +229,7 @@ export function registerAdminCommand(pi: ExtensionAPI, oauthBlock: unknown): voi
 
         case "refresh": {
           const count = await registerLemonadeProvider(pi, payload, oauthBlock);
+          syncModelStore(payload.baseUrl, payload.apiKey);
           ctx.ui.notify(`Re-synced: ${count} models registered.`, "info");
           return;
         }
@@ -361,8 +363,9 @@ export function registerAdminCommand(pi: ExtensionAPI, oauthBlock: unknown): voi
             "info",
           );
 
-          // Re-sync provider to update contextWindow
+          // Re-sync provider and models-store to update contextWindow
           await registerLemonadeProvider(pi, payload, oauthBlock);
+          syncModelStore(payload.baseUrl, payload.apiKey);
           ctx.ui.notify("Provider re-registered with new ctx.", "info");
           return;
         }

@@ -20,9 +20,14 @@ export function mapToProviderModel(m: LemonadeModelInfo) {
   const cfg = m.config ?? {};
   const recipeOpts = m.recipe_options ?? {};
 
-  // Priority: loaded model's actual ctx_size > max_context_window > config fallback
+  // Priority: loaded model's actual ctx_size > model's top-level
+  // max_context_window > model definition's config values > fallback.
+  // The top-level fields cover models that are not loaded yet (e.g. MTP
+  // backends) — without them they fell through to the 128k default even
+  // when the server reported a real 262k window.
   const contextWindow =
-    (recipeOpts["ctx_size"] as number) ??
+    (recipeOpts.ctx_size as number) ??
+    (m.max_context_window as number) ??
     (cfg["max_context_window"] as number) ??
     (cfg["context_window"] as number) ??
     (cfg["context_len"] as number) ??

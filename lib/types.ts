@@ -83,6 +83,7 @@ export interface LemonadeModelInfo {
   };
   backend_url?: string;
   config?: Record<string, unknown>;
+  labels?: string[];
 }
 
 // ─── OAuth types ────────────────────────────────────────────────────────────

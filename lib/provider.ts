@@ -40,6 +40,7 @@ export async function registerLemonadeProvider(
     name: payload?.serverName ? `Lemonade (${payload.serverName})` : "Lemonade",
     baseUrl: baseUrl ? `${baseUrl}/v1` : "http://localhost:8000/v1",
     api: "openai-completions",
+    auth_type: "api-key", // servers with an API key authenticate via Bearer header
     models: providerModels,
     oauth: oauthBlock,
   };

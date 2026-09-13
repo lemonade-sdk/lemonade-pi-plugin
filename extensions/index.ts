@@ -22,6 +22,7 @@ import { readStoredPayload } from "../lib/admin.js";
 import { registerAdminCommand } from "../lib/admin.js";
 import { oauthLogin } from "../lib/oauth.js";
 import { registerLemonadeProvider } from "../lib/provider.js";
+import { syncModelStore } from "../lib/sync-store.js";
 
 export default async function lemonadeProvider(pi: ExtensionAPI): Promise<void> {
   const oauthBlock = {
@@ -36,6 +37,8 @@ export default async function lemonadeProvider(pi: ExtensionAPI): Promise<void> 
         } catch {
           // network blip — keep creds, retry on next refresh
         }
+        // Keep models-store.json in sync during token refresh too.
+        syncModelStore(payload.baseUrl, payload.apiKey);
       }
       return encodeCreds(payload);
     },
@@ -64,6 +67,9 @@ export default async function lemonadeProvider(pi: ExtensionAPI): Promise<void> 
     } catch {
       // ignore — refreshToken will retry
     }
+    // Keep models-store.json in sync so subprocesses and subagents can
+    // resolve lemonade models with correct context sizes.
+    syncModelStore(stored.baseUrl, stored.apiKey);
   }
 
   registerAdminCommand(pi, oauthBlock);
