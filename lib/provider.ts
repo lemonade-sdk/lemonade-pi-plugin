@@ -8,9 +8,19 @@ import type { ExtensionAPI, LemonadeModelInfo } from "./types.js";
 import type { CredsPayload } from "./types.js";
 import { PROVIDER_ID } from "./constants.js";
 import { fetchModels } from "./http.js";
-import { mapToProviderModel as mapFn } from "./models.js";
+import { mapToProviderModel as mapFn, isPiVisible } from "./models.js";
 
-export { isReasoningModel, mapToProviderModel } from "./models.js";
+export { isReasoningModel, isPiCompatible, isPiVisible, mapToProviderModel } from "./models.js";
+
+/**
+ * Latest FULL server model list, captured at provider registration. Served
+ * to /lemonade argument completion (synchronous by contract — it cannot
+ * fetch live); undefined until the first registration fetch succeeds.
+ */
+let cachedServerModels: LemonadeModelInfo[] | undefined;
+export function getCachedServerModels(): LemonadeModelInfo[] | undefined {
+  return cachedServerModels;
+}
 
 // ─── Provider (re-)registration ─────────────────────────────────────────────
 
@@ -27,7 +37,10 @@ export async function registerLemonadeProvider(
   let providerModels: ReturnType<typeof mapFn>[] = [];
   if (baseUrl) {
     const raw = await fetchModels(baseUrl, payload?.apiKey);
-    providerModels = raw.map(mapFn);
+    cachedServerModels = raw;
+    // Only chat + tool-calling models are usable in pi; non-chat classes
+    // (tts/image/3d/embeddings/transcription) never reach the picker.
+    providerModels = raw.filter(isPiVisible).map(mapFn);
   }
 
   try {
@@ -40,6 +53,7 @@ export async function registerLemonadeProvider(
     name: payload?.serverName ? `Lemonade (${payload.serverName})` : "Lemonade",
     baseUrl: baseUrl ? `${baseUrl}/v1` : "http://localhost:8000/v1",
     api: "openai-completions",
+    auth_type: "api-key", // servers with an API key authenticate via Bearer header
     models: providerModels,
     oauth: oauthBlock,
   };

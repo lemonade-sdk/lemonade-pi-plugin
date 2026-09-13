@@ -10,6 +10,7 @@ import { buildBaseUrl } from "./url-helpers.js";
 import { checkHealth } from "./http.js";
 import { discoverServers } from "./discovery.js";
 import { registerLemonadeProvider } from "./provider.js";
+import { syncModelStore } from "./sync-store.js";
 import { encodeCreds } from "./credentials.js";
 
 export async function oauthLogin(
@@ -86,6 +87,7 @@ export async function oauthLogin(
     serverName: `${serverName} v${health.version}`,
   };
   await registerLemonadeProvider(pi, payload, oauthBlock);
+  syncModelStore(baseUrl, apiKey);
 
   return encodeCreds(payload);
 }

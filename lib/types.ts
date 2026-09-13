@@ -8,6 +8,8 @@
 
 // ─── Pi interfaces ──────────────────────────────────────────────────────────
 
+import type { AutocompleteItem } from "@earendil-works/pi-tui";
+
 export interface ExtensionAPI {
   registerProvider(id: string, config: Record<string, unknown>): void;
   unregisterProvider(id: string): void;
@@ -15,8 +17,22 @@ export interface ExtensionAPI {
     name: string,
     options: {
       description?: string;
+      /** Optional argument auto-completion (pi TUI); prefix is the raw args text. */
+      getArgumentCompletions?: (prefix: string) => AutocompleteItem[] | null;
       handler: (args: string, ctx: PiCommandContext) => Promise<void>;
     },
+  ): void;
+  /**
+   * Register an extension event handler. Used for `before_provider_request`:
+   * the handler receives `(event, ctx)` and its RETURN VALUE replaces the
+   * outgoing wire payload (return undefined to pass it through untouched).
+   */
+  on(
+    event: "before_provider_request",
+    handler: (
+      event: { type: "before_provider_request"; payload?: Record<string, unknown> },
+      ctx: { thinkingLevel?: string; model?: { id?: string } },
+    ) => Record<string, unknown> | undefined,
   ): void;
 }
 
@@ -25,6 +41,19 @@ export interface PiCommandContext {
     notify(message: string, level?: "info" | "warning" | "error"): void;
     input?(prompt: string, placeholder?: string): Promise<string>;
     select?<T>(prompt: string, options: T[]): Promise<T>;
+    /**
+     * pi's custom-UI host (docs/tui.md): open a fullscreen component and
+     * await its result. Structurally typed — the component object is the
+     * standard { render, handleInput, invalidate } triple.
+     */
+    custom?<T>(
+      factory: (
+        tui: { requestRender(): void },
+        theme: { fg?: (color: string, text: string) => string },
+        keybindings: unknown,
+        done: (value: T) => void,
+      ) => { render(width: number): string[]; handleInput?(data: string): void; invalidate(): void },
+    ): Promise<T>;
   };
   signal?: AbortSignal;
 }
@@ -83,6 +112,14 @@ export interface LemonadeModelInfo {
   };
   backend_url?: string;
   config?: Record<string, unknown>;
+  labels?: string[];
+  /**
+   * Checkpoint pointer in Lemonade's `"<hf-repo>:<file>"` shape (e.g.
+   * `unsloth/Qwen3.8-27B-GGUF:Qwen3.8-27B-UD-Q4_K_XL.gguf`). Used by
+   * `/lemonade tune` to fetch the checkpoint's embedded GGUF sampling
+   * metadata.
+   */
+  checkpoint?: string;
 }
 
 // ─── OAuth types ────────────────────────────────────────────────────────────
